@@ -242,19 +242,7 @@ async function seedData() {
             ]
         );
 
-        // Upload some default documents for some students
-        if (i % 3 === 0) {
-            await run(
-                `INSERT INTO documents (user_id, title, file_path, document_type)
-                 VALUES (?, ?, ?, ?)`,
-                [menteeResult.id, 'Birth_Certificate.pdf', 'uploads/birth_cert.pdf', 'Birth Certificate']
-            );
-            await run(
-                `INSERT INTO documents (user_id, title, file_path, document_type)
-                 VALUES (?, ?, ?, ?)`,
-                [menteeResult.id, 'Sem_1_Marksheet.pdf', 'uploads/marksheet_sem1.pdf', 'Marksheet']
-            );
-        }
+
     }
 
     // 4. Seeding Global announcements
