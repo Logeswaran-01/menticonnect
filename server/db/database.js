@@ -1,5 +1,4 @@
 const { Pool } = require('pg');
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
@@ -7,50 +6,33 @@ const bcrypt = require('bcryptjs');
 // Load environment variables
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-const dbType = process.env.DB_TYPE || 'sqlite'; // Default to sqlite for local instant stability
-
-let pool = null;
-let sqliteDb = null;
-
-if (dbType === 'postgres') {
-    pool = new Pool({
+// Use connectionString if provided (Render), fallback to credentials
+const pool = process.env.DATABASE_URL
+    ? new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: {
+            rejectUnauthorized: false,
+        },
+      })
+    : new Pool({
         user: process.env.PGUSER || 'postgres',
         host: process.env.PGHOST || 'localhost',
         database: process.env.PGDATABASE || 'mentor_mentee_portal',
         password: process.env.PGPASSWORD || 'password',
         port: parseInt(process.env.PGPORT || '5432'),
-    });
+      });
 
-    pool.connect((err, client, release) => {
-        if (err) {
-            console.error('PostgreSQL database connection error:', err.message);
-            console.warn('\n======================================================');
-            console.warn('ACTION REQUIRED: Please ensure:');
-            console.warn('1. Your PostgreSQL server is running.');
-            console.warn('2. The database "mentor_mentee_portal" has been created.');
-            console.warn('3. The credentials inside server/.env are correct.');
-            console.warn('======================================================\n');
-        } else {
-            console.log('Connected to PostgreSQL database successfully!');
-            release();
-            initDatabase();
-        }
-    });
-} else {
-    const dbPath = path.join(__dirname, 'portal.db');
-    sqliteDb = new sqlite3.Database(dbPath, (err) => {
-        if (err) {
-            console.error('SQLite connection error:', err);
-        } else {
-            console.log('Connected to SQLite database successfully at:', dbPath);
-            initDatabase();
-        }
-    });
-}
+pool.connect((err, client, release) => {
+    if (err) {
+        console.error('PostgreSQL database connection error:', err.message);
+    } else {
+        console.log('Connected to PostgreSQL successfully!');
+        release();
+        initDatabase();
+    }
+});
 
-const schemaPath = dbType === 'postgres' 
-    ? path.join(__dirname, 'schema.sql') 
-    : path.join(__dirname, 'schema_sqlite.sql');
+const schemaPath = path.join(__dirname, 'schema.sql');
 
 // Helper to convert SQLite style '?' placeholders to PostgreSQL style '$1', '$2', etc.
 function convertPlaceholders(sql) {
@@ -71,7 +53,6 @@ function translateMySQLToPostgreSQL(mysqlSql) {
     sql = sql.replace(/INT AUTO_INCREMENT/gi, 'SERIAL');
     
     // Replace MySQL JSON type with standard TEXT/JSON
-    // (PostgreSQL supports JSON natively, so leaving JSON is fine, but mapping inline ENUM to VARCHAR)
     sql = sql.replace(/ENUM\([^)]+\)/gi, 'VARCHAR(50)');
     
     // Remove MySQL engine specifications (ENGINE=InnoDB)
@@ -83,66 +64,39 @@ function translateMySQLToPostgreSQL(mysqlSql) {
     return sql;
 }
 
-// Promise-based wrappers for database operations mapped to SQLite or PostgreSQL
+// Promise-based wrappers for database operations mapped to PostgreSQL pool
 async function run(sql, params = []) {
-    if (dbType === 'postgres') {
-        const convertedSql = convertPlaceholders(sql);
-        let finalSql = convertedSql;
-        
-        // Append RETURNING id to INSERT statements to mimic SQLite's lastID return behavior
-        if (sql.trim().toUpperCase().startsWith('INSERT') && !sql.toUpperCase().includes('RETURNING')) {
-            finalSql += ' RETURNING id';
-        }
-        
-        const res = await pool.query(finalSql, params);
-        return {
-            id: res.rows[0] ? res.rows[0].id : null,
-            changes: res.rowCount
-        };
-    } else {
-        return new Promise((resolve, reject) => {
-            sqliteDb.run(sql, params, function (err) {
-                if (err) reject(err);
-                else resolve({ id: this.lastID, changes: this.changes });
-            });
-        });
+    const convertedSql = convertPlaceholders(sql);
+    let finalSql = convertedSql;
+    
+    // Append RETURNING id to INSERT statements to mimic SQLite's lastID return behavior
+    if (sql.trim().toUpperCase().startsWith('INSERT') && !sql.toUpperCase().includes('RETURNING')) {
+        finalSql += ' RETURNING id';
     }
+    
+    const res = await pool.query(finalSql, params);
+    return {
+        id: res.rows[0] ? res.rows[0].id : null,
+        changes: res.rowCount
+    };
 }
 
 async function get(sql, params = []) {
-    if (dbType === 'postgres') {
-        const convertedSql = convertPlaceholders(sql);
-        const res = await pool.query(convertedSql, params);
-        return res.rows[0] || null;
-    } else {
-        return new Promise((resolve, reject) => {
-            sqliteDb.get(sql, params, (err, row) => {
-                if (err) reject(err);
-                else resolve(row);
-            });
-        });
-    }
+    const convertedSql = convertPlaceholders(sql);
+    const res = await pool.query(convertedSql, params);
+    return res.rows[0] || null;
 }
 
 async function all(sql, params = []) {
-    if (dbType === 'postgres') {
-        const convertedSql = convertPlaceholders(sql);
-        const res = await pool.query(convertedSql, params);
-        return res.rows;
-    } else {
-        return new Promise((resolve, reject) => {
-            sqliteDb.all(sql, params, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
-        });
-    }
+    const convertedSql = convertPlaceholders(sql);
+    const res = await pool.query(convertedSql, params);
+    return res.rows;
 }
 
 async function initDatabase() {
     try {
         const schemaRaw = fs.readFileSync(schemaPath, 'utf8');
-        const schema = dbType === 'postgres' ? translateMySQLToPostgreSQL(schemaRaw) : schemaRaw;
+        const schema = translateMySQLToPostgreSQL(schemaRaw);
         
         const statements = schema
             .split(';')
@@ -156,21 +110,8 @@ async function initDatabase() {
 
         // Wipe all tables to remove leaves, meetings, chats, grievances and re-seed users fresh
         console.log('Cleaning up existing database records and history...');
-        if (dbType === 'postgres') {
-            await run('TRUNCATE TABLE leaves, meetings, tasks, messages, notifications, grievances, feedback, documents, academic_progress, users RESTART IDENTITY CASCADE;').catch(async () => {
-                // Fallback if TRUNCATE fails
-                await run('DELETE FROM leaves').catch(() => {});
-                await run('DELETE FROM meetings').catch(() => {});
-                await run('DELETE FROM tasks').catch(() => {});
-                await run('DELETE FROM messages').catch(() => {});
-                await run('DELETE FROM notifications').catch(() => {});
-                await run('DELETE FROM grievances').catch(() => {});
-                await run('DELETE FROM feedback').catch(() => {});
-                await run('DELETE FROM documents').catch(() => {});
-                await run('DELETE FROM academic_progress').catch(() => {});
-                await run('DELETE FROM users').catch(() => {});
-            });
-        } else {
+        await run('TRUNCATE TABLE leaves, meetings, tasks, messages, notifications, grievances, feedback, documents, academic_progress, users RESTART IDENTITY CASCADE;').catch(async () => {
+            // Fallback if TRUNCATE fails
             await run('DELETE FROM leaves').catch(() => {});
             await run('DELETE FROM meetings').catch(() => {});
             await run('DELETE FROM tasks').catch(() => {});
@@ -181,8 +122,7 @@ async function initDatabase() {
             await run('DELETE FROM documents').catch(() => {});
             await run('DELETE FROM academic_progress').catch(() => {});
             await run('DELETE FROM users').catch(() => {});
-            await run("DELETE FROM sqlite_sequence WHERE name IN ('leaves','meetings','tasks','messages','notifications','grievances','feedback','documents','academic_progress','users')").catch(() => {});
-        }
+        });
 
         console.log('Seeding initial data (1 Admin, 5 Mentors, 45 Mentees)...');
         await seedData();
