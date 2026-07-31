@@ -11,6 +11,17 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_portal_key';
 app.use(cors());
 app.use(express.json());
 
+// Helper to safely handle JSON parsing (handles both pre-parsed PG objects and raw strings)
+function parseJsonField(field, defaultValue = {}) {
+    if (!field) return defaultValue;
+    if (typeof field === 'object') return field;
+    try {
+        return JSON.parse(field);
+    } catch (e) {
+        return defaultValue;
+    }
+}
+
 // Authentication Middleware
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
@@ -135,8 +146,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
             year_semester: user.year_semester,
             mentor_id: user.mentor_id,
             mentor_name: user.mentor_name,
-            contact_details: JSON.parse(user.contact_details || '{}'),
-            parent_details: JSON.parse(user.parent_details || '{}'),
+            contact_details: parseJsonField(user.contact_details, {}),
+            parent_details: parseJsonField(user.parent_details, {}),
             placement_status: user.placement_status,
             dob: user.dob,
             accommodation_type: user.accommodation_type,
@@ -583,7 +594,7 @@ app.get('/api/academic/:mentee_id', authenticateToken, async (req, res) => {
     try {
         const row = await db.get(`SELECT * FROM academic_progress WHERE mentee_id = ?`, [mentee_id]);
         if (row) {
-            row.internal_marks = JSON.parse(row.internal_marks || '[]');
+            row.internal_marks = parseJsonField(row.internal_marks, []);
         }
         res.json(row || { error: 'Academic record not found' });
     } catch (err) {
@@ -743,8 +754,8 @@ app.get('/api/admin/users', authenticateToken, requireRole(['admin']), async (re
         );
         res.json(users.map(u => ({
             ...u,
-            contact_details: JSON.parse(u.contact_details || '{}'),
-            parent_details: JSON.parse(u.parent_details || '{}')
+            contact_details: parseJsonField(u.contact_details, {}),
+            parent_details: parseJsonField(u.parent_details, {})
         })));
     } catch (err) {
         res.status(500).json({ error: err.message });
