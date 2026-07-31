@@ -13,14 +13,14 @@ const pool = process.env.DATABASE_URL
         ssl: {
             rejectUnauthorized: false,
         },
-      })
+    })
     : new Pool({
         user: process.env.PGUSER || 'postgres',
         host: process.env.PGHOST || 'localhost',
         database: process.env.PGDATABASE || 'mentor_mentee_portal',
         password: process.env.PGPASSWORD || 'password',
         port: parseInt(process.env.PGPORT || '5432'),
-      });
+    });
 
 pool.connect((err, client, release) => {
     if (err) {
@@ -43,24 +43,24 @@ function convertPlaceholders(sql) {
 // Helper to translate MySQL schema dialect to PostgreSQL compatible schema dialect
 function translateMySQLToPostgreSQL(mysqlSql) {
     let sql = mysqlSql;
-    
+
     // Remove database creation and use commands (PostgreSQL handles connection-level database selection)
     sql = sql.replace(/CREATE DATABASE[^;]+;/gi, '');
     sql = sql.replace(/USE [^;]+;/gi, '');
-    
+
     // Replace MySQL INT AUTO_INCREMENT PRIMARY KEY with PostgreSQL SERIAL PRIMARY KEY
     sql = sql.replace(/INT AUTO_INCREMENT PRIMARY KEY/gi, 'SERIAL PRIMARY KEY');
     sql = sql.replace(/INT AUTO_INCREMENT/gi, 'SERIAL');
-    
+
     // Replace MySQL JSON type with standard TEXT/JSON
     sql = sql.replace(/ENUM\([^)]+\)/gi, 'VARCHAR(50)');
-    
+
     // Remove MySQL engine specifications (ENGINE=InnoDB)
     sql = sql.replace(/\)\s*ENGINE\s*=\s*InnoDB\s*;/gi, ');');
-    
+
     // Remove MySQL ON UPDATE CURRENT_TIMESTAMP modifier
     sql = sql.replace(/ON UPDATE CURRENT_TIMESTAMP/gi, '');
-    
+
     return sql;
 }
 
@@ -68,12 +68,12 @@ function translateMySQLToPostgreSQL(mysqlSql) {
 async function run(sql, params = []) {
     const convertedSql = convertPlaceholders(sql);
     let finalSql = convertedSql;
-    
+
     // Append RETURNING id to INSERT statements to mimic SQLite's lastID return behavior
     if (sql.trim().toUpperCase().startsWith('INSERT') && !sql.toUpperCase().includes('RETURNING')) {
         finalSql += ' RETURNING id';
     }
-    
+
     const res = await pool.query(finalSql, params);
     return {
         id: res.rows[0] ? res.rows[0].id : null,
@@ -97,7 +97,7 @@ async function initDatabase() {
     try {
         const schemaRaw = fs.readFileSync(schemaPath, 'utf8');
         const schema = translateMySQLToPostgreSQL(schemaRaw);
-        
+
         const statements = schema
             .split(';')
             .map(s => s.trim())
@@ -112,16 +112,16 @@ async function initDatabase() {
         console.log('Cleaning up existing database records and history...');
         await run('TRUNCATE TABLE leaves, meetings, tasks, messages, notifications, grievances, feedback, documents, academic_progress, users RESTART IDENTITY CASCADE;').catch(async () => {
             // Fallback if TRUNCATE fails
-            await run('DELETE FROM leaves').catch(() => {});
-            await run('DELETE FROM meetings').catch(() => {});
-            await run('DELETE FROM tasks').catch(() => {});
-            await run('DELETE FROM messages').catch(() => {});
-            await run('DELETE FROM notifications').catch(() => {});
-            await run('DELETE FROM grievances').catch(() => {});
-            await run('DELETE FROM feedback').catch(() => {});
-            await run('DELETE FROM documents').catch(() => {});
-            await run('DELETE FROM academic_progress').catch(() => {});
-            await run('DELETE FROM users').catch(() => {});
+            await run('DELETE FROM leaves').catch(() => { });
+            await run('DELETE FROM meetings').catch(() => { });
+            await run('DELETE FROM tasks').catch(() => { });
+            await run('DELETE FROM messages').catch(() => { });
+            await run('DELETE FROM notifications').catch(() => { });
+            await run('DELETE FROM grievances').catch(() => { });
+            await run('DELETE FROM feedback').catch(() => { });
+            await run('DELETE FROM documents').catch(() => { });
+            await run('DELETE FROM academic_progress').catch(() => { });
+            await run('DELETE FROM users').catch(() => { });
         });
 
         console.log('Seeding initial data (1 Admin, 5 Mentors, 45 Mentees)...');
@@ -242,7 +242,19 @@ async function seedData() {
             ]
         );
 
-
+        // Upload some default documents for some students
+        if (i % 3 === 0) {
+            await run(
+                `INSERT INTO documents (user_id, title, file_path, document_type)
+                 VALUES (?, ?, ?, ?)`,
+                [menteeResult.id, 'Birth_Certificate.pdf', 'uploads/birth_cert.pdf', 'Birth Certificate']
+            );
+            await run(
+                `INSERT INTO documents (user_id, title, file_path, document_type)
+                 VALUES (?, ?, ?, ?)`,
+                [menteeResult.id, 'Sem_1_Marksheet.pdf', 'uploads/marksheet_sem1.pdf', 'Marksheet']
+            );
+        }
     }
 
     // 4. Seeding Global announcements

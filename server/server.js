@@ -11,6 +11,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_portal_key';
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+    res.json({
+        success: true,
+        message: "MentiConnect Backend is running successfully 🚀"
+    });
+});
+
 // Helper to safely handle JSON parsing (handles both pre-parsed PG objects and raw strings)
 function parseJsonField(field, defaultValue = {}) {
     if (!field) return defaultValue;
