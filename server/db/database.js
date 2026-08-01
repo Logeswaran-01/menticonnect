@@ -114,12 +114,17 @@ async function initDatabase() {
         for (const statement of statements) {
             await run(statement);
         }
+        await run('ALTER TABLE leaves ADD COLUMN IF NOT EXISTS leave_type VARCHAR(100) DEFAULT \'General Purpose (GP)\';');
+        await run('ALTER TABLE leaves ADD COLUMN IF NOT EXISTS rejection_reason TEXT;');
+        await run('ALTER TABLE users ADD COLUMN IF NOT EXISTS qualification VARCHAR(100) DEFAULT \'M.E., Ph.D. in CSE\';');
         console.log('Database tables verified/created successfully.');
 
         // Wipe all tables to remove leaves, meetings, chats, grievances and re-seed users fresh
         console.log('Cleaning up existing database records and history...');
-        await run('TRUNCATE TABLE leaves, meetings, tasks, messages, notifications, grievances, feedback, documents, academic_progress, users RESTART IDENTITY CASCADE;').catch(async () => {
+        await run('TRUNCATE TABLE meeting_logs, mentor_reallocations, leaves, meetings, tasks, messages, notifications, grievances, feedback, documents, academic_progress, users RESTART IDENTITY CASCADE;').catch(async () => {
             // Fallback if TRUNCATE fails
+            await run('DELETE FROM meeting_logs').catch(() => { });
+            await run('DELETE FROM mentor_reallocations').catch(() => { });
             await run('DELETE FROM leaves').catch(() => { });
             await run('DELETE FROM meetings').catch(() => { });
             await run('DELETE FROM tasks').catch(() => { });
@@ -145,8 +150,8 @@ async function seedData() {
 
     // 1. Insert 1 Admin
     const adminResult = await run(
-        `INSERT INTO users (email, password_hash, role, register_number, name, department, contact_details)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO users (email, password_hash, role, register_number, name, department, contact_details, qualification)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
             'admin@institution.edu',
             commonPasswordHash,
@@ -154,7 +159,8 @@ async function seedData() {
             'ADM001',
             'Dr. Sarah Jenkins',
             'Computer Science & Engineering',
-            JSON.stringify({ phone: '+1234567890', address: 'Admin Block, Room 101' })
+            JSON.stringify({ phone: '+1234567890', address: 'Admin Block, Room 101' }),
+            'Ph.D. in Computer Science & Engineering (Senior Professor & HOD)'
         ]
     );
 
@@ -172,8 +178,8 @@ async function seedData() {
         const mentorEmail = `mentor${i + 1}@institution.edu`;
         const mentorEmpId = `EMP10${i + 1}`;
         const mentorResult = await run(
-            `INSERT INTO users (email, password_hash, role, register_number, name, department, contact_details)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO users (email, password_hash, role, register_number, name, department, contact_details, qualification)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 mentorEmail,
                 commonPasswordHash,
@@ -181,7 +187,8 @@ async function seedData() {
                 mentorEmpId,
                 mentorNames[i],
                 'Computer Science & Engineering',
-                JSON.stringify({ phone: `+123456780${i}`, address: `Department Room ${201 + i}` })
+                JSON.stringify({ phone: `+1800555900${i}`, address: `Faculty Block, Room ${201 + i}` }),
+                i % 2 === 0 ? 'M.Tech, Ph.D. (IIT Madras)' : 'M.S., Ph.D. (Stanford University)'
             ]
         );
         mentorIds.push(mentorResult.id);

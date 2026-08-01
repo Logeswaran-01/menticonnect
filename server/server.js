@@ -33,9 +33,9 @@ function parseJsonField(field, defaultValue = {}) {
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
-    
+
     if (!token) return res.status(401).json({ error: 'Access token required' });
-    
+
     jwt.verify(token, JWT_SECRET, (err, user) => {
         if (err) return res.status(403).json({ error: 'Invalid or expired token' });
         req.user = user;
@@ -100,18 +100,18 @@ app.post('/api/auth/login', async (req, res) => {
         if (!user) {
             return res.status(400).json({ error: 'User not found' });
         }
-        
+
         const validPassword = bcrypt.compareSync(password, user.password_hash);
         if (!validPassword) {
             return res.status(400).json({ error: 'Invalid credentials' });
         }
-        
+
         const token = jwt.sign(
             { id: user.id, email: user.email, role: user.role, name: user.name },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
-        
+
         res.json({
             token,
             user: {
@@ -138,11 +138,11 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
              FROM users u 
              LEFT JOIN users m ON u.mentor_id = m.id 
              LEFT JOIN academic_progress ap ON u.id = ap.mentee_id
-             WHERE u.id = ?`, 
+             WHERE u.id = ?`,
             [req.user.id]
         );
         if (!user) return res.status(404).json({ error: 'User not found' });
-        
+
         res.json({
             id: user.id,
             email: user.email,
@@ -162,7 +162,8 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
             gpa: user.gpa,
             attendance: user.attendance,
             backlogs: user.backlogs,
-            reward_points: user.reward_points
+            reward_points: user.reward_points,
+            qualification: user.qualification
         });
     } catch (err) {
         console.error(err);
@@ -172,7 +173,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 // --- LEAVE APPLICATION ROUTING ---
 app.post('/api/leaves', authenticateToken, requireRole(['mentee']), async (req, res) => {
-    const { start_date, end_date, reason } = req.body;
+    const { start_date, end_date, reason, leave_type } = req.body;
     if (!start_date || !end_date || !reason) {
         return res.status(400).json({ error: 'All fields are required' });
     }
@@ -198,9 +199,10 @@ app.post('/api/leaves', authenticateToken, requireRole(['mentee']), async (req, 
             return res.status(400).json({ error: 'Overlap detected with another applied/approved leave session' });
         }
 
+        const typeOfLeave = leave_type || 'General Purpose (GP)';
         const result = await db.run(
-            `INSERT INTO leaves (mentee_id, start_date, end_date, reason, status) VALUES (?, ?, ?, ?, 'Pending')`,
-            [req.user.id, start_date, end_date, reason]
+            `INSERT INTO leaves (mentee_id, start_date, end_date, reason, status, leave_type) VALUES (?, ?, ?, ?, 'Pending', ?)`,
+            [req.user.id, start_date, end_date, reason, typeOfLeave]
         );
 
         // Fetch student details to notify their mentor
@@ -214,7 +216,7 @@ app.post('/api/leaves', authenticateToken, requireRole(['mentee']), async (req, 
                 [
                     req.user.id,
                     studentInfo.mentor_id,
-                    `Student ${studentInfo.name} has applied for a leave from ${start_date} to ${end_date}. Reason: ${reason}`
+                    `Student ${studentInfo.name} has applied for ${typeOfLeave} from ${start_date} to ${end_date}. Reason: ${reason}`
                 ]
             );
         }
@@ -257,12 +259,28 @@ app.get('/api/leaves', authenticateToken, async (req, res) => {
 });
 
 app.patch('/api/leaves/:id', authenticateToken, requireRole(['mentor', 'admin']), async (req, res) => {
-    const { status } = req.body;
+    const { status, rejection_reason } = req.body;
     try {
+        const leave = await db.get(`SELECT mentee_id, leave_type FROM leaves WHERE id = ?`, [req.params.id]);
+        if (!leave) {
+            return res.status(404).json({ error: 'Leave request not found' });
+        }
+
         const result = await db.run(
-            `UPDATE leaves SET status = ? WHERE id = ?`,
-            [status, req.params.id]
+            `UPDATE leaves SET status = ?, rejection_reason = ? WHERE id = ?`,
+            [status, rejection_reason || null, req.params.id]
         );
+
+        const message = status === 'Rejected'
+            ? `Your leave request (${leave.leave_type}) has been rejected. Reason: ${rejection_reason || 'No reason provided.'}`
+            : `Your leave request (${leave.leave_type}) has been approved!`;
+
+        const now = new Date().toISOString();
+        await db.run(
+            `INSERT INTO notifications (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`,
+            [req.user.id, leave.mentee_id, message, now]
+        );
+
         res.json({ success: true, changes: result.changes });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -416,13 +434,13 @@ app.get('/api/announcements', authenticateToken, async (req, res) => {
                    FROM announcements a 
                    JOIN users u ON a.created_by = u.id`;
         let params = [];
-        
+
         if (req.user.role === 'mentee') {
             sql += ` WHERE target_role IN ('all', 'mentee')`;
         } else if (req.user.role === 'mentor') {
             sql += ` WHERE target_role IN ('all', 'mentor')`;
         }
-        
+
         sql += ` ORDER BY a.created_at DESC`;
         const rows = await db.all(sql, params);
         res.json(rows);
@@ -481,23 +499,78 @@ app.get('/api/meetings', authenticateToken, async (req, res) => {
 app.post('/api/meetings', authenticateToken, requireRole(['mentor']), async (req, res) => {
     const { title, description, date, time, venue_link, mentee_id } = req.body;
     try {
+        if (Array.isArray(mentee_id)) {
+            if (mentee_id.length === 0) {
+                return res.status(400).json({ error: 'Please select at least one student' });
+            }
+            for (const mid of mentee_id) {
+                await db.run(
+                    `INSERT INTO meetings (title, description, date, time, venue_link, status, mentor_id, mentee_id) 
+                     VALUES (?, ?, ?, ?, ?, 'Scheduled', ?, ?)`,
+                    [title, description, date, time, venue_link, req.user.id, mid]
+                );
+                await db.run(
+                    `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
+                    [
+                        req.user.id,
+                        mid,
+                        `New meeting scheduled: "${title}" on ${date} at ${time}. Venue/Link: ${venue_link}`
+                    ]
+                );
+            }
+            res.status(201).json({ success: true, count: mentee_id.length });
+        } else if (mentee_id === 'all') {
+            const mentees = await db.all("SELECT id FROM users WHERE mentor_id = ? AND role = 'mentee'", [req.user.id]);
+            if (mentees.length === 0) {
+                return res.status(400).json({ error: 'No mentees assigned to this mentor' });
+            }
+            for (const mentee of mentees) {
+                await db.run(
+                    `INSERT INTO meetings (title, description, date, time, venue_link, status, mentor_id, mentee_id) 
+                     VALUES (?, ?, ?, ?, ?, 'Scheduled', ?, ?)`,
+                    [title, description, date, time, venue_link, req.user.id, mentee.id]
+                );
+                await db.run(
+                    `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
+                    [
+                        req.user.id,
+                        mentee.id,
+                        `New meeting scheduled: "${title}" on ${date} at ${time}. Venue/Link: ${venue_link}`
+                    ]
+                );
+            }
+            res.status(201).json({ success: true, count: mentees.length });
+        } else {
+            const result = await db.run(
+                `INSERT INTO meetings (title, description, date, time, venue_link, status, mentor_id, mentee_id) 
+                 VALUES (?, ?, ?, ?, ?, 'Scheduled', ?, ?)`,
+                [title, description, date, time, venue_link, req.user.id, mentee_id]
+            );
+
+            // Notify the mentee
+            await db.run(
+                `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
+                [
+                    req.user.id,
+                    mentee_id,
+                    `New meeting scheduled: "${title}" on ${date} at ${time}. Venue/Link: ${venue_link}`
+                ]
+            );
+
+            res.status(201).json({ id: result.id, title, date, time, status: 'Scheduled' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/meetings/cancel-all', authenticateToken, requireRole(['mentor']), async (req, res) => {
+    try {
         const result = await db.run(
-            `INSERT INTO meetings (title, description, date, time, venue_link, status, mentor_id, mentee_id) 
-             VALUES (?, ?, ?, ?, ?, 'Scheduled', ?, ?)`,
-            [title, description, date, time, venue_link, req.user.id, mentee_id]
+            `UPDATE meetings SET status = 'Cancelled' WHERE mentor_id = ? AND status = 'Scheduled'`,
+            [req.user.id]
         );
-
-        // Notify the mentee
-        await db.run(
-            `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
-            [
-                req.user.id,
-                mentee_id,
-                `New meeting scheduled: "${title}" on ${date} at ${time}. Venue/Link: ${venue_link}`
-            ]
-        );
-
-        res.status(201).json({ id: result.id, title, date, time, status: 'Scheduled' });
+        res.json({ success: true, changes: result.changes });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -507,37 +580,110 @@ app.patch('/api/meetings/:id', authenticateToken, async (req, res) => {
     const { status } = req.body;
     try {
         let result;
-        // Fetch meeting details to notify the correct mentee
         const meeting = await db.get('SELECT * FROM meetings WHERE id = ?', [req.params.id]);
-        
+
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found' });
+        }
+
+        const matchingMeetings = await db.all(
+            `SELECT * FROM meetings WHERE title = ? AND date = ? AND time = ? AND venue_link = ? AND mentor_id = ?`,
+            [meeting.title, meeting.date, meeting.time, meeting.venue_link, meeting.mentor_id]
+        );
+
         if (req.user.role === 'mentor') {
             result = await db.run(
-                `UPDATE meetings SET status = ? WHERE id = ? AND mentor_id = ?`,
-                [status, req.params.id, req.user.id]
+                `UPDATE meetings SET status = ? WHERE title = ? AND date = ? AND time = ? AND venue_link = ? AND mentor_id = ?`,
+                [status, meeting.title, meeting.date, meeting.time, meeting.venue_link, req.user.id]
             );
         } else if (req.user.role === 'admin') {
             result = await db.run(
-                `UPDATE meetings SET status = ? WHERE id = ?`,
-                [status, req.params.id]
+                `UPDATE meetings SET status = ? WHERE title = ? AND date = ? AND time = ? AND venue_link = ? AND mentor_id = ?`,
+                [status, meeting.title, meeting.date, meeting.time, meeting.venue_link, meeting.mentor_id]
             );
         } else {
             return res.status(403).json({ error: 'Unauthorized to modify meetings' });
         }
 
-        // Notify the mentee of status change if updated successfully
-        if (meeting && result.changes > 0) {
+        // Notify all targeted mentees of status change
+        if (result.changes > 0) {
             const senderId = req.user.id;
+            for (const m of matchingMeetings) {
+                await db.run(
+                    `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
+                    [
+                        senderId,
+                        m.mentee_id,
+                        `Meeting "${m.title}" scheduled for ${m.date} has been marked as ${status}.`
+                    ]
+                );
+            }
+        }
+
+        res.json({ success: true, changes: result.changes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- MEETING LOGS ---
+app.post('/api/meetings/:id/logs', authenticateToken, requireRole(['mentor']), async (req, res) => {
+    const { discussion_points, action_items, mentor_comments } = req.body;
+    try {
+        const meeting = await db.get('SELECT * FROM meetings WHERE id = ? AND mentor_id = ?', [req.params.id, req.user.id]);
+        if (!meeting) {
+            return res.status(404).json({ error: 'Meeting not found or unauthorized' });
+        }
+
+        // Update all matching meetings status to Completed
+        await db.run(
+            `UPDATE meetings SET status = 'Completed' 
+             WHERE title = ? AND date = ? AND time = ? AND venue_link = ? AND mentor_id = ?`,
+            [meeting.title, meeting.date, meeting.time, meeting.venue_link, req.user.id]
+        );
+
+        // Insert meeting log (overwrite if already exists)
+        await db.run(
+            `INSERT INTO meeting_logs (meeting_id, discussion_points, action_items, mentor_comments)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(meeting_id) DO UPDATE SET
+                discussion_points = EXCLUDED.discussion_points,
+                action_items = EXCLUDED.action_items,
+                mentor_comments = EXCLUDED.mentor_comments`,
+            [req.params.id, discussion_points, action_items, mentor_comments]
+        );
+
+        // Notify HOD/Admin
+        const adminUsers = await db.all("SELECT id FROM users WHERE role = 'admin'");
+        for (const admin of adminUsers) {
             await db.run(
                 `INSERT INTO notifications (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
                 [
-                    senderId,
-                    meeting.mentee_id,
-                    `Meeting "${meeting.title}" scheduled for ${meeting.date} has been marked as ${status}.`
+                    req.user.id,
+                    admin.id,
+                    `Mentor ${req.user.name} submitted completion logs for meeting: "${meeting.title}"`
                 ]
             );
         }
 
-        res.json({ success: true, changes: result.changes });
+        res.status(201).json({ success: true, message: 'Meeting log submitted successfully!' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/meetings/logs', authenticateToken, requireRole(['admin']), async (req, res) => {
+    try {
+        const rows = await db.all(
+            `SELECT ml.*, m.title as meeting_title, m.date as meeting_date, m.time as meeting_time,
+                    mentor.name as mentor_name, mentee.name as mentee_name
+             FROM meeting_logs ml
+             JOIN meetings m ON ml.meeting_id = m.id
+             JOIN users mentor ON m.mentor_id = mentor.id
+             JOIN users mentee ON m.mentee_id = mentee.id
+             ORDER BY ml.submitted_at DESC`
+        );
+        res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -597,7 +743,7 @@ app.patch('/api/tasks/:id', authenticateToken, async (req, res) => {
             params.push(feedback);
         }
         query = query.slice(0, -2); // Remove trailing comma and space
-        
+
         if (req.user.role === 'mentee') {
             query += ` WHERE id = ? AND assigned_to = ?`;
             params.push(req.params.id, req.user.id);
@@ -637,8 +783,8 @@ app.get('/api/academic/:mentee_id', authenticateToken, async (req, res) => {
 app.get('/api/mentor/mentees', authenticateToken, requireRole(['mentor']), async (req, res) => {
     try {
         const rows = await db.all(
-            `SELECT u.id, u.name, u.register_number, u.email, u.year_semester, u.department, u.placement_status,
-                    a.cgpa, a.gpa, a.attendance, a.backlogs
+            `SELECT u.id, u.name, u.register_number, u.email, u.year_semester, u.department, u.placement_status, u.parent_details, u.contact_details, u.dob, u.accommodation_type,
+                    a.cgpa, a.gpa, a.attendance, a.backlogs, a.reward_points, a.internal_marks
              FROM users u
              LEFT JOIN academic_progress a ON u.id = a.mentee_id
              WHERE u.mentor_id = ? AND u.role = 'mentee'`,
@@ -654,6 +800,17 @@ app.get('/api/mentor/admins', authenticateToken, requireRole(['mentor']), async 
     try {
         const rows = await db.all(
             `SELECT id, name, email, register_number, department FROM users WHERE role = 'admin'`
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/mentor/list', authenticateToken, requireRole(['mentor', 'admin']), async (req, res) => {
+    try {
+        const rows = await db.all(
+            `SELECT id, name, email, department FROM users WHERE role = 'mentor'`
         );
         res.json(rows);
     } catch (err) {
@@ -774,6 +931,119 @@ app.post('/api/documents', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/mentor/reallocate-request', authenticateToken, requireRole(['mentor']), async (req, res) => {
+    const { leave_reason, allocations } = req.body;
+    if (!leave_reason || !allocations) {
+        return res.status(400).json({ error: 'Leave reason and allocations are required.' });
+    }
+    try {
+        const result = await db.run(
+            `INSERT INTO mentor_reallocations (original_mentor_id, leave_reason, allocations, status)
+             VALUES (?, ?, ?, 'Pending')`,
+            [req.user.id, leave_reason, JSON.stringify(allocations)]
+        );
+
+        const admins = await db.all("SELECT id FROM users WHERE role = 'admin'");
+        const mentorInfo = await db.get("SELECT name FROM users WHERE id = ?", [req.user.id]);
+        const now = new Date().toISOString();
+        for (const admin of admins) {
+            await db.run(
+                `INSERT INTO notifications (sender_id, receiver_id, content, created_at)
+                 VALUES (?, ?, ?, ?)`,
+                [
+                    req.user.id,
+                    admin.id,
+                    `Mentor ${mentorInfo?.name || 'Faculty'} has requested mentorship delegation due to: "${leave_reason}"`,
+                    now
+                ]
+            );
+        }
+        res.status(201).json({ success: true, id: result.id });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/mentor/reallocate-requests', authenticateToken, requireRole(['mentor']), async (req, res) => {
+    try {
+        const rows = await db.all(
+            `SELECT * FROM mentor_reallocations WHERE original_mentor_id = ? ORDER BY created_at DESC`,
+            [req.user.id]
+        );
+        res.json(rows.map(r => ({ ...r, allocations: parseJsonField(r.allocations, []) })));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/reallocations', authenticateToken, requireRole(['admin']), async (req, res) => {
+    try {
+        const rows = await db.all(
+            `SELECT r.*, u.name as mentor_name
+             FROM mentor_reallocations r
+             JOIN users u ON r.original_mentor_id = u.id
+             ORDER BY r.created_at DESC`
+        );
+        res.json(rows.map(r => ({ ...r, allocations: parseJsonField(r.allocations, []) })));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/admin/reallocations/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    const { status } = req.body;
+    if (!status || (status !== 'Approved' && status !== 'Rejected')) {
+        return res.status(400).json({ error: 'Valid status (Approved/Rejected) is required' });
+    }
+    try {
+        const request = await db.get(`SELECT * FROM mentor_reallocations WHERE id = ?`, [req.params.id]);
+        if (!request) {
+            return res.status(404).json({ error: 'Delegation request not found' });
+        }
+        if (request.status !== 'Pending') {
+            return res.status(400).json({ error: 'This request has already been processed.' });
+        }
+
+        await db.run(`UPDATE mentor_reallocations SET status = ? WHERE id = ?`, [status, req.params.id]);
+
+        const allocations = parseJsonField(request.allocations, []);
+        const now = new Date().toISOString();
+
+        if (status === 'Approved') {
+            for (const alloc of allocations) {
+                const { mentee_id, target_mentor_id } = alloc;
+                await db.run(`UPDATE users SET mentor_id = ? WHERE id = ?`, [target_mentor_id, mentee_id]);
+
+                const student = await db.get(`SELECT name FROM users WHERE id = ?`, [mentee_id]);
+                const newMentor = await db.get(`SELECT name FROM users WHERE id = ?`, [target_mentor_id]);
+
+                await db.run(
+                    `INSERT INTO notifications (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`,
+                    [req.user.id, mentee_id, `You have been temporarily assigned to a new mentor: ${newMentor?.name || 'Faculty'}.`, now]
+                );
+
+                await db.run(
+                    `INSERT INTO notifications (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`,
+                    [req.user.id, target_mentor_id, `You have been assigned a new mentee: ${student?.name || 'Student'} due to delegation.`, now]
+                );
+            }
+
+            await db.run(
+                `INSERT INTO notifications (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`,
+                [req.user.id, request.original_mentor_id, `Your mentorship delegation request has been approved! All mentees have been reallocated.`, now]
+            );
+        } else {
+            await db.run(
+                `INSERT INTO notifications (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)`,
+                [req.user.id, request.original_mentor_id, `Your mentorship delegation request was rejected by HOD/Admin.`, now]
+            );
+        }
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- ADMIN USER & ALLOCATION MANAGEMENT ---
 app.get('/api/admin/users', authenticateToken, requireRole(['admin']), async (req, res) => {
     try {
@@ -793,6 +1063,22 @@ app.get('/api/admin/users', authenticateToken, requireRole(['admin']), async (re
     }
 });
 
+app.get('/api/admin/performance', authenticateToken, requireRole(['admin']), async (req, res) => {
+    try {
+        const rows = await db.all(
+            `SELECT u.id, u.name, u.register_number, u.mentor_id, mentor.name as mentor_name,
+                    a.cgpa, a.gpa, a.attendance, a.backlogs, a.reward_points
+             FROM users u
+             LEFT JOIN users mentor ON u.mentor_id = mentor.id
+             LEFT JOIN academic_progress a ON u.id = a.mentee_id
+             WHERE u.role = 'mentee'`
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/admin/users', authenticateToken, requireRole(['admin']), async (req, res) => {
     const { email, password, role, register_number, name, department, year_semester, mentor_id } = req.body;
     try {
@@ -803,7 +1089,7 @@ app.post('/api/admin/users', authenticateToken, requireRole(['admin']), async (r
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [email, hash, role, register_number, name, department, role === 'mentee' ? year_semester : null, role === 'mentee' ? (mentor_id || null) : null]
         );
-        
+
         if (role === 'mentee') {
             await db.run(
                 `INSERT INTO academic_progress (mentee_id, cgpa, gpa, attendance, internal_marks, backlogs) 
@@ -876,7 +1162,7 @@ app.patch('/api/admin/users/:id', authenticateToken, requireRole(['admin']), asy
     try {
         let query = 'UPDATE users SET ';
         let params = [];
-        
+
         if (mentor_id !== undefined) {
             query += 'mentor_id = ?, ';
             params.push(mentor_id === "" ? null : mentor_id);
@@ -897,10 +1183,10 @@ app.patch('/api/admin/users/:id', authenticateToken, requireRole(['admin']), asy
             query += 'year_semester = ?, ';
             params.push(year_semester);
         }
-        
+
         query = query.slice(0, -2) + ' WHERE id = ?';
         params.push(req.params.id);
-        
+
         await db.run(query, params);
         res.json({ success: true });
     } catch (err) {
@@ -959,10 +1245,10 @@ app.get('/api/admin/analytics', authenticateToken, requireRole(['admin']), async
         const totalMentees = await db.get(`SELECT COUNT(*) as count FROM users WHERE role = 'mentee'`);
         const totalGrievances = await db.get(`SELECT COUNT(*) as count FROM grievances`);
         const pendingGrievances = await db.get(`SELECT COUNT(*) as count FROM grievances WHERE status = 'Pending'`);
-        
+
         const avgAttendance = await db.get(`SELECT AVG(attendance) as avg FROM academic_progress`);
         const avgCgpa = await db.get(`SELECT AVG(cgpa) as avg FROM academic_progress`);
-        
+
         const placementPlaced = await db.get(`SELECT COUNT(*) as count FROM users WHERE role = 'mentee' AND placement_status = 'Placed'`);
         const placementEligible = await db.get(`SELECT COUNT(*) as count FROM users WHERE role = 'mentee' AND placement_status = 'Eligible'`);
 

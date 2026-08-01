@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     placement_status VARCHAR(50) DEFAULT 'N/A',
     dob DATE,
     accommodation_type VARCHAR(50) DEFAULT 'Dayscholar',
+    qualification VARCHAR(100) DEFAULT 'M.E., Ph.D. in CSE',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (mentor_id) REFERENCES users(id) ON DELETE SET NULL
@@ -119,6 +120,8 @@ CREATE TABLE IF NOT EXISTS leaves (
     end_date VARCHAR(50) NOT NULL,
     reason TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'Pending',
+    leave_type VARCHAR(100) DEFAULT 'General Purpose (GP)',
+    rejection_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (mentee_id) REFERENCES users(id) ON DELETE CASCADE
@@ -144,4 +147,24 @@ CREATE TABLE IF NOT EXISTS notifications (
 
     FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS mentor_reallocations (
+    id SERIAL PRIMARY KEY,
+    original_mentor_id INT NOT NULL,
+    leave_reason TEXT NOT NULL,
+    allocations JSON NOT NULL,
+    status VARCHAR(50) DEFAULT 'Pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (original_mentor_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meeting_logs (
+    id SERIAL PRIMARY KEY,
+    meeting_id INT NOT NULL UNIQUE,
+    discussion_points TEXT NOT NULL,
+    action_items TEXT,
+    mentor_comments TEXT,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
 );
