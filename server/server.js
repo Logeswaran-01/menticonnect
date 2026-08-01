@@ -385,6 +385,30 @@ app.get('/api/notifications', authenticateToken, async (req, res) => {
     }
 });
 
+app.delete('/api/notifications/sender/:sender_id', authenticateToken, async (req, res) => {
+    try {
+        const result = await db.run(
+            `DELETE FROM notifications WHERE receiver_id = ? AND sender_id = ?`,
+            [req.user.id, req.params.sender_id]
+        );
+        res.json({ success: true, changes: result.changes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/notifications/:id', authenticateToken, async (req, res) => {
+    try {
+        const result = await db.run(
+            `DELETE FROM notifications WHERE id = ? AND (receiver_id = ? OR receiver_id IS NULL)`,
+            [req.params.id, req.user.id]
+        );
+        res.json({ success: true, changes: result.changes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- ANNOUNCEMENTS ---
 app.get('/api/announcements', authenticateToken, async (req, res) => {
     try {

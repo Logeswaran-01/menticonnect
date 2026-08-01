@@ -119,7 +119,7 @@ export default function App() {
 
   const fetchUserData = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/auth/me`, {
+      const res = await fetch(`${API_BASE}/auth/me`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -139,13 +139,13 @@ export default function App() {
     try {
       const headers = { Authorization: `Bearer ${token}` };
       const [annRes, meetRes, taskRes, grievRes, docRes, leaveRes, alertRes] = await Promise.all([
-        fetch(`${API_BASE}/api/announcements`, { headers }),
-        fetch(`${API_BASE}/api/meetings`, { headers }),
-        fetch(`${API_BASE}/api/tasks`, { headers }),
-        fetch(`${API_BASE}/api/grievances`, { headers }),
-        fetch(`${API_BASE}/api/documents`, { headers }),
-        fetch(`${API_BASE}/api/leaves`, { headers }),
-        fetch(`${API_BASE}/api/notifications`, { headers })
+        fetch(`${API_BASE}/announcements`, { headers }),
+        fetch(`${API_BASE}/meetings`, { headers }),
+        fetch(`${API_BASE}/tasks`, { headers }),
+        fetch(`${API_BASE}/grievances`, { headers }),
+        fetch(`${API_BASE}/documents`, { headers }),
+        fetch(`${API_BASE}/leaves`, { headers }),
+        fetch(`${API_BASE}/notifications`, { headers })
       ]);
 
       if (annRes.ok) setAnnouncements(await annRes.json());
@@ -164,7 +164,7 @@ export default function App() {
     e.preventDefault();
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/api/auth/login`, {
+      const res = await fetch(`${API_BASE}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -185,7 +185,7 @@ export default function App() {
     setError('');
     setRegSuccess('');
     try {
-      const res = await fetch(`${API_BASE}/api/auth/signup`, {
+      const res = await fetch(`${API_BASE}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(regForm)
@@ -483,8 +483,8 @@ export default function App() {
           {activeTab === 'leaves' && <LeavesHubView user={user} leaves={leaves} token={token} refreshData={fetchGlobalData} />}
           {activeTab === 'academic' && <MenteeAcademicView user={user} token={token} />}
           {activeTab === 'documents' && <DocumentsView user={user} documents={documents} token={token} refreshData={fetchGlobalData} triggerDownload={triggerDownload} />}
-          {activeTab === 'chat' && <OneToOneChatView user={user} token={token} chatMode="mentee" />}
-          {activeTab === 'admin-chat' && <OneToOneChatView user={user} token={token} chatMode="admin" />}
+          {activeTab === 'chat' && <OneToOneChatView user={user} token={token} chatMode="mentee" refreshData={fetchGlobalData} />}
+          {activeTab === 'admin-chat' && <OneToOneChatView user={user} token={token} chatMode="admin" refreshData={fetchGlobalData} />}
         </div>
       </main>
     </div>
@@ -508,9 +508,23 @@ function DashboardView({ user, announcements, meetings, tasks, grievances, refre
     }
   }, [user]);
 
+  const handleDismissNotification = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/notifications/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        refreshData();
+      }
+    } catch (err) {
+      console.error('Failed to dismiss notification:', err);
+    }
+  };
+
   const fetchAnalytics = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/analytics`, {
+      const res = await fetch(`${API_BASE}/admin/analytics`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setAnalytics(await res.json());
@@ -521,7 +535,7 @@ function DashboardView({ user, announcements, meetings, tasks, grievances, refre
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users`, {
+      const res = await fetch(`${API_BASE}/admin/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setUsersList(await res.json());
@@ -532,7 +546,7 @@ function DashboardView({ user, announcements, meetings, tasks, grievances, refre
 
   const fetchMentees = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/mentor/mentees`, {
+      const res = await fetch(`${API_BASE}/mentor/mentees`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setUsersList(await res.json());
@@ -545,7 +559,7 @@ function DashboardView({ user, announcements, meetings, tasks, grievances, refre
     e.preventDefault();
     if (!newAlert.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/api/notifications`, {
+      const res = await fetch(`${API_BASE}/notifications`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -810,6 +824,26 @@ function DashboardView({ user, announcements, meetings, tasks, grievances, refre
                       Sender: <span style={{ color: 'var(--text-secondary)', fontWeight: '600' }}>{a.sender_name}</span> • {getLocalTimeAndDate(a.created_at)}
                     </p>
                   </div>
+                  <button
+                    onClick={() => handleDismissNotification(a.id)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '6px',
+                      borderRadius: '50%',
+                      transition: 'background 0.2s',
+                      flexShrink: 0
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    title="Dismiss Notification"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
               );
             })
@@ -831,7 +865,7 @@ function LeavesHubView({ user, leaves, token, refreshData }) {
     e.preventDefault();
     setErrorMsg('');
     try {
-      const res = await fetch(`${API_BASE}/api/leaves`, {
+      const res = await fetch(`${API_BASE}/leaves`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -856,7 +890,7 @@ function LeavesHubView({ user, leaves, token, refreshData }) {
 
   const handleAction = async (id, status) => {
     try {
-      const res = await fetch(`${API_BASE}/api/leaves/${id}`, {
+      const res = await fetch(`${API_BASE}/leaves/${id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -983,7 +1017,7 @@ function AdminUsersView({ token }) {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users`, {
+      const res = await fetch(`${API_BASE}/admin/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setUsers(await res.json());
@@ -997,7 +1031,7 @@ function AdminUsersView({ token }) {
   const handleAddUser = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users`, {
+      const res = await fetch(`${API_BASE}/admin/users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1030,7 +1064,7 @@ function AdminUsersView({ token }) {
   const handleDeleteUser = async (id) => {
     if (!window.confirm('Are you sure you want to remove this user account?')) return;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${id}`, {
+      const res = await fetch(`${API_BASE}/admin/users/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1042,7 +1076,7 @@ function AdminUsersView({ token }) {
 
   const handleReallocate = async (menteeId, mentorId) => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${menteeId}`, {
+      const res = await fetch(`${API_BASE}/admin/users/${menteeId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1109,7 +1143,7 @@ function AdminUsersView({ token }) {
           };
         });
 
-        const res = await fetch(`${API_BASE}/api/admin/users/bulk`, {
+        const res = await fetch(`${API_BASE}/admin/users/bulk`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1364,7 +1398,7 @@ function AdminUsersView({ token }) {
 }
 
 // --- ONE-ON-ONE CHAT VIEW ---
-function OneToOneChatView({ user, token, chatMode }) {
+function OneToOneChatView({ user, token, chatMode, refreshData }) {
   const [relations, setRelations] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -1379,6 +1413,16 @@ function OneToOneChatView({ user, token, chatMode }) {
 
   useEffect(() => {
     if (selectedUser) {
+      // Clear notifications from this sender automatically when opening the chat
+      fetch(`${API_BASE}/notifications/sender/${selectedUser.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .then(() => {
+        if (refreshData) refreshData();
+      })
+      .catch(err => console.error('Failed to clear notifications:', err));
+
       fetchMessages();
       const interval = setInterval(fetchMessages, 2500); // Polling for messages
       return () => clearInterval(interval);
@@ -1388,7 +1432,7 @@ function OneToOneChatView({ user, token, chatMode }) {
   const fetchChatUsers = async () => {
     try {
       if (user.role === 'admin') {
-        const res = await fetch(`${API_BASE}/api/admin/users`, { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch(`${API_BASE}/admin/users`, { headers: { Authorization: `Bearer ${token}` } });
         if (res.ok) {
           const list = await res.json();
           setRelations(list.filter(u => u.role === 'mentor'));
@@ -1396,14 +1440,14 @@ function OneToOneChatView({ user, token, chatMode }) {
       } else if (user.role === 'mentor') {
         if (chatMode === 'admin') {
           // Fetch only admins
-          const res = await fetch(`${API_BASE}/api/mentor/admins`, { headers: { Authorization: `Bearer ${token}` } });
+          const res = await fetch(`${API_BASE}/mentor/admins`, { headers: { Authorization: `Bearer ${token}` } });
           if (res.ok) {
             const list = await res.json();
             setRelations(list.map(a => ({ ...a, name: `${a.name}` })));
           }
         } else {
           // Fetch only mentees (students)
-          const res = await fetch(`${API_BASE}/api/mentor/mentees`, { headers: { Authorization: `Bearer ${token}` } });
+          const res = await fetch(`${API_BASE}/mentor/mentees`, { headers: { Authorization: `Bearer ${token}` } });
           if (res.ok) {
             const list = await res.json();
             setRelations(list.map(m => ({ ...m, name: `${m.name}` })));
@@ -1411,7 +1455,7 @@ function OneToOneChatView({ user, token, chatMode }) {
         }
       } else {
         // Mentee chats with their mentor
-        const res = await fetch(`${API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+        const res = await fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
         if (res.ok) {
           const me = await res.json();
           if (me.mentor_id) {
@@ -1427,7 +1471,7 @@ function OneToOneChatView({ user, token, chatMode }) {
   const fetchMessages = async () => {
     if (!selectedUser) return;
     try {
-      const res = await fetch(`${API_BASE}/api/messages/${selectedUser.id}`, {
+      const res = await fetch(`${API_BASE}/messages/${selectedUser.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setMessages(await res.json());
@@ -1440,7 +1484,7 @@ function OneToOneChatView({ user, token, chatMode }) {
     e.preventDefault();
     if (!newMsg.trim() || !selectedUser) return;
     try {
-      const res = await fetch(`${API_BASE}/api/messages`, {
+      const res = await fetch(`${API_BASE}/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1554,7 +1598,7 @@ function GrievancesView({ user, grievances, token, refreshData }) {
   const handleRaiseGrievance = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/api/grievances`, {
+      const res = await fetch(`${API_BASE}/grievances`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1575,7 +1619,7 @@ function GrievancesView({ user, grievances, token, refreshData }) {
   const handleResolveGrievance = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/api/grievances/${selectedGrievance.id}`, {
+      const res = await fetch(`${API_BASE}/grievances/${selectedGrievance.id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1697,7 +1741,7 @@ function MentorMenteesView({ token, refreshData, triggerDownload }) {
 
   const fetchMentees = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/mentor/mentees`, {
+      const res = await fetch(`${API_BASE}/mentor/mentees`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setMentees(await res.json());
@@ -1708,7 +1752,7 @@ function MentorMenteesView({ token, refreshData, triggerDownload }) {
 
   const fetchMenteeDocs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/documents/${selectedMentee.id}`, {
+      const res = await fetch(`${API_BASE}/documents/${selectedMentee.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setMenteeDocs(await res.json());
@@ -1720,7 +1764,7 @@ function MentorMenteesView({ token, refreshData, triggerDownload }) {
   const handleFeedbackSubmit = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/api/feedback`, {
+      const res = await fetch(`${API_BASE}/feedback`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1863,7 +1907,7 @@ function MeetingsView({ user, meetings, token, refreshData }) {
 
   const fetchMentees = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/mentor/mentees`, {
+      const res = await fetch(`${API_BASE}/mentor/mentees`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setMentees(await res.json());
@@ -1875,7 +1919,7 @@ function MeetingsView({ user, meetings, token, refreshData }) {
   const handleScheduleMeeting = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/api/meetings`, {
+      const res = await fetch(`${API_BASE}/meetings`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1895,7 +1939,7 @@ function MeetingsView({ user, meetings, token, refreshData }) {
 
   const handleUpdateStatus = async (id, status) => {
     try {
-      const res = await fetch(`${API_BASE}/api/meetings/${id}`, {
+      const res = await fetch(`${API_BASE}/meetings/${id}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -2025,7 +2069,7 @@ function MenteeAcademicView({ user, token }) {
 
   const fetchAcademic = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/academic/${user.id}`, {
+      const res = await fetch(`${API_BASE}/academic/${user.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setAcademic(await res.json());
@@ -2137,7 +2181,7 @@ function DocumentsView({ user, documents, token, refreshData, triggerDownload })
     if (!file) return;
 
     try {
-      const res = await fetch(`${API_BASE}/api/documents`, {
+      const res = await fetch(`${API_BASE}/documents`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
