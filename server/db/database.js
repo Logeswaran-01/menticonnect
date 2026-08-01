@@ -1,7 +1,15 @@
-const { Pool } = require('pg');
+const pg = require('pg');
+const { Pool } = pg;
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
+
+// Configure pg-types to return TIMESTAMP (without timezone) as raw string
+// to prevent local timezone offset shifting.
+pg.types.setTypeParser(1114, function(stringValue) {
+    return stringValue; 
+});
+
 
 // Load environment variables
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
